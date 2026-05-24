@@ -5,17 +5,62 @@ from fastapi.staticfiles import StaticFiles
 import json
 import os
 import random
+from PIL import Image  # 💡 추가된 이미지 처리 라이브러리
 
 app = FastAPI()
 
-# --- 로컬 이미지 폴더 연결 (Pictures) ---
-if not os.path.exists("Pictures"):
-    os.makedirs("Pictures")
-app.mount("/Pictures", StaticFiles(directory="Pictures"), name="Pictures")
+# --- 로컬 이미지 폴더 설정 및 자동 최적화 ---
+ORIGINAL_DIR = "Pictures"
+OPTIMIZED_DIR = "Optimized_Pictures"
+
+if not os.path.exists(ORIGINAL_DIR):
+    os.makedirs(ORIGINAL_DIR)
+if not os.path.exists(OPTIMIZED_DIR):
+    os.makedirs(OPTIMIZED_DIR)
+
+def optimize_images():
+    print("⏳ 이미지 최적화 검사 중...")
+    valid_exts = {".jpg", ".jpeg", ".png", ".gif", ".webp"}
+    for filename in os.listdir(ORIGINAL_DIR):
+        ext = os.path.splitext(filename)[1].lower()
+        if ext in valid_exts:
+            orig_path = os.path.join(ORIGINAL_DIR, filename)
+            # gif 파일은 리사이징하면 애니메이션이 깨지므로 원본 그대로 복사(또는 스킵)
+            if ext == ".gif":
+                opt_path = os.path.join(OPTIMIZED_DIR, filename)
+                if not os.path.exists(opt_path):
+                    with open(orig_path, "rb") as f_in, open(opt_path, "wb") as f_out:
+                        f_out.write(f_in.read())
+                continue
+
+            # 최적화된 파일은 무조건 jpg로 통일해서 저장
+            opt_filename = os.path.splitext(filename)[0] + ".jpg"
+            opt_path = os.path.join(OPTIMIZED_DIR, opt_filename)
+
+            # 이미 최적화된 파일이 없거나, 원본 파일이 최근에 수정된 경우에만 리사이징 실행!
+            if not os.path.exists(opt_path) or os.path.getmtime(orig_path) > os.path.getmtime(opt_path):
+                try:
+                    with Image.open(orig_path) as img:
+                        # 투명 배경(PNG) 에러 방지를 위해 RGB 변환
+                        if img.mode in ("RGBA", "P"):
+                            img = img.convert("RGB")
+                        
+                        # 가로세로 최대 800px로 비율 유지하며 리사이징 (화질 85%)
+                        img.thumbnail((800, 800))
+                        img.save(opt_path, format="JPEG", quality=85)
+                        print(f"✅ 압축 완료: {filename} -> {opt_filename}")
+                except Exception as e:
+                    print(f"❌ 이미지 처리 실패 ({filename}): {e}")
+
+# 서버 시작 전 이미지 압축 로직 1회 실행
+optimize_images()
+
+# 💡 프론트엔드에는 무거운 원본(Pictures) 대신, 가벼운 최적화 폴더(Optimized_Pictures)를 제공
+app.mount("/Pictures", StaticFiles(directory=OPTIMIZED_DIR), name="Pictures")
 
 def get_images():
-    valid_exts = {".jpg", ".jpeg", ".png", ".gif", ".webp"}
-    files = [f"/Pictures/{f}" for f in os.listdir("Pictures") if os.path.splitext(f)[1].lower() in valid_exts]
+    valid_exts = {".jpg", ".jpeg"} # 최적화된 파일은 전부 jpg로 변환됨 (gif 제외)
+    files = [f"/Pictures/{f}" for f in os.listdir(OPTIMIZED_DIR) if os.path.splitext(f)[1].lower() in valid_exts or f.lower().endswith(".gif")]
     if not files:
         files = [
             "https://images.unsplash.com/photo-1533738363-b7f9aef128ce?w=500&q=80",
